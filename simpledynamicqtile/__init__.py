@@ -62,6 +62,8 @@ class DynamicBaseLayout(Layout):
         return c
 
     def add(self, client):
+        if client in self.clients:
+            return
         if isinstance(client, DynamicBaseLayout):
             client.parent = self
             client.root_layout = self.root_layout
@@ -78,6 +80,8 @@ class DynamicBaseLayout(Layout):
         return client 
 
     def add_beginning(self, client):
+        if client in self.clients:
+            return
         if isinstance(client, DynamicBaseLayout):
             client.parent = self
             client.root_layout = self.root_layout
@@ -94,6 +98,8 @@ class DynamicBaseLayout(Layout):
         return client
 
     def add_end(self, client):
+        if client in self.clients:
+            return
         if isinstance(client, DynamicBaseLayout):
             client.parent = self
             client.root_layout = self.root_layout
@@ -780,6 +786,9 @@ class SimpleDynamic(DynamicBaseLayout):
         print(self)
 
     def remove(self, client):
+        if isinstance(client, Window):
+            if client.fullscreen:
+                return
         client = DynamicBaseLayout.remove(self, client)
         self.cleanup()
         self.reset_size()
