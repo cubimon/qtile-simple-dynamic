@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name='simple dynamic tiles',
-    version='0.1',
+    version='0.3',
     packages=['simpledynamicqtile'],
     license='',
     author='Cubimon',

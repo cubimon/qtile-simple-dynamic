@@ -3,6 +3,38 @@ from libqtile.layout.base import Layout
 from libqtile.window import Window
 from libqtile.config import ScreenRect
 
+class Rect:
+
+    def __init__(self, x, y, width, height):
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+
+    def __str__(self):
+        return 'Rect(x={}, y={}, width={}, height={})'.format(
+                self.x, self.y, self.width, self.height)
+
+class WindowWrapper:
+
+    def __init__(self, window):
+        if window is None:
+            raise ValueError('window must be set')
+        self.window = window
+
+    def __eq__(self, other):
+        if isinstance(other, self.__class__):
+            return self.window == other.window
+        elif isinstance(other, Window):
+            return self.window == other
+        return False
+
+    def __hash__(self):
+        return self.window.__hash__()
+
+    def __str__(self):
+        return 'WindowWrapper({})'.format(str(self.window))
+
 '''
 Windows are leaves
 up/left is previous
@@ -15,6 +47,7 @@ class DynamicBaseLayout(Layout):
         self.parent = None
         self.clients = []
         self.client_focus = 0
+        self.rect = None
         self.redraw = False
         self.root_layout = None
 
@@ -23,6 +56,7 @@ class DynamicBaseLayout(Layout):
         c.parent = self.parent
         c.clients = []
         c.client_focus = self.client_focus
+        c.rect = None
         c.redraw = self.redraw
         c.root_layout = self.root_layout
         return c
@@ -31,8 +65,8 @@ class DynamicBaseLayout(Layout):
         if isinstance(client, DynamicBaseLayout):
             client.parent = self
             client.root_layout = self.root_layout
-        if isinstance(client, Window) \
-                and not isinstance(self, self.root_layout.default_layout):
+        if isinstance(client, WindowWrapper) and \
+                not isinstance(self, self.root_layout.default_layout):
             direct_parent = self.root_layout.default_layout()
             direct_parent.parent = self
             direct_parent.root_layout = self.root_layout
@@ -47,8 +81,8 @@ class DynamicBaseLayout(Layout):
         if isinstance(client, DynamicBaseLayout):
             client.parent = self
             client.root_layout = self.root_layout
-        if isinstance(client, Window) \
-                and not isinstance(self, self.root_layout.default_layout):
+        if isinstance(client, WindowWrapper) and \
+                not isinstance(self, self.root_layout.default_layout):
             direct_parent = self.root_layout.default_layout()
             direct_parent.parent = self
             direct_parent.root_layout = self.root_layout
@@ -63,8 +97,8 @@ class DynamicBaseLayout(Layout):
         if isinstance(client, DynamicBaseLayout):
             client.parent = self
             client.root_layout = self.root_layout
-        if isinstance(client, Window) \
-                and not isinstance(self, self.root_layout.default_layout):
+        if isinstance(client, WindowWrapper) and \
+                not isinstance(self, self.root_layout.default_layout):
             direct_parent = self.root_layout.default_layout()
             direct_parent.parent = self
             direct_parent.root_layout = self.root_layout
@@ -123,8 +157,8 @@ class DynamicBaseLayout(Layout):
         if layout != self:
             return layout.focus_next()
         else:
-            while layout.client_focus >= len(layout.clients) - 1 \
-                    and layout.parent:
+            while layout.client_focus >= len(layout.clients) - 1 and \
+                    layout.parent:
                 layout = layout.parent
             if layout.client_focus < len(layout.clients) - 1:
                 layout.client_focus += 1
@@ -166,7 +200,7 @@ class DynamicBaseLayout(Layout):
         else:
             client = self.clients[self.client_focus]
             self.remove(client, recursive=False)
-            horizontal_layout = Horizontal()
+            horizontal_layout = HorizontalLayout()
             self.parent.replace(self, horizontal_layout)
             client_parent = self.root_layout.default_layout()
             horizontal_layout.add(client_parent)
@@ -183,7 +217,7 @@ class DynamicBaseLayout(Layout):
         else:
             client = self.clients[self.client_focus]
             self.remove(client, recursive=False)
-            horizontal_layout = Horizontal()
+            horizontal_layout = HorizontalLayout()
             self.parent.replace(self, horizontal_layout)
             horizontal_layout.add(self)
             client_parent = self.root_layout.default_layout()
@@ -200,7 +234,7 @@ class DynamicBaseLayout(Layout):
         else:
             client = self.clients[self.client_focus]
             self.remove(client, recursive=False)
-            vertical_layout = Vertical()
+            vertical_layout = VerticalLayout()
             self.parent.replace(self, vertical_layout)
             client_parent = self.root_layout.default_layout()
             vertical_layout.add(client_parent)
@@ -217,7 +251,7 @@ class DynamicBaseLayout(Layout):
         else:
             client = self.clients[self.client_focus]
             self.remove(client, recursive=False)
-            vertical_layout = Vertical()
+            vertical_layout = VerticalLayout()
             self.parent.replace(self, vertical_layout)
             vertical_layout.add(self)
             client_parent = self.root_layout.default_layout()
@@ -225,12 +259,36 @@ class DynamicBaseLayout(Layout):
             client_parent.add(client)
             return client
 
+    def resize(self, x, y):
+        layout = self.focused_layout()
+        if not layout:
+            return
+        vertical_layout = None
+        horizontal_layout = None
+        while (vertical_layout is None or horizontal_layout is None) and \
+                layout.parent:
+            if isinstance(layout, VerticalLayout) and not vertical_layout:
+                vertical_layout = layout
+            if isinstance(layout, HorizontalLayout) and not horizontal_layout:
+                horizontal_layout = layout
+            layout = layout.parent
+        if vertical_layout:
+            vertical_layout.resize(0, y)
+        if horizontal_layout:
+            horizontal_layout.resize(x, 0)
+
+    def reset_size(self):
+        for client in self.clients:
+            client.rect = None
+            if isinstance(client, DynamicBaseLayout):
+                client.reset_size()
+
     def remove(self, client, recursive=True):
         if client in self.clients:
             self.clients.remove(client)
             if len(self.clients) == 0:
-                if recursive and self.parent \
-                        and self.parent != self.root_layout:
+                if recursive and self.parent and \
+                        self.parent != self.root_layout:
                     return self.parent.remove(self)
             else:
                 if self.client_focus == len(self.clients):
@@ -245,6 +303,7 @@ class DynamicBaseLayout(Layout):
                         return result
 
     def cleanup(self):
+        # removes redundant layouts
         for leaf in self.leaf_layouts():
             node = leaf
             while node and node != node.root_layout:
@@ -281,7 +340,7 @@ class DynamicBaseLayout(Layout):
         # return focused layout, direct parent
         if len(self.clients) == 0:
             return self
-        if isinstance(self.clients[self.client_focus], Window):
+        if isinstance(self.clients[self.client_focus], WindowWrapper):
             return self
         else:
             return self.clients[self.client_focus].focused_layout()
@@ -290,7 +349,7 @@ class DynamicBaseLayout(Layout):
         # return focused client
         if len(self.clients) == 0:
             return None
-        if isinstance(self.clients[self.client_focus], Window):
+        if isinstance(self.clients[self.client_focus], WindowWrapper):
             return self.clients[self.client_focus]
         else:
             return self.clients[self.client_focus].focused_client()
@@ -319,7 +378,7 @@ class DynamicBaseLayout(Layout):
     def is_leaf_layout(self):
         # true if all clients are windows
         for client in self.clients:
-            if not isinstance(client, Window):
+            if not isinstance(client, WindowWrapper):
                 return False
         return True
 
@@ -327,27 +386,31 @@ class DynamicBaseLayout(Layout):
         return self.parent == None
 
     def __str__(self):
-        result = type(self).__name__
+        result = '{}(rect={})'.format(type(self).__name__, self.rect)
         clients_result = '\n'.join(map(str, self.clients))
         clients_result = textwrap.indent(clients_result, '  ')
         if len(clients_result) > 0:
             result += '\n' + clients_result
         return result
 
-class Vertical(DynamicBaseLayout):
+class VerticalLayout(DynamicBaseLayout):
     '''
     Vertical layout
     '''
 
     def configure(self, client, screen):
+        if not self.rect:
+            self.rect = Rect(screen.x, screen.y, screen.width, screen.height)
         if client in self.clients:
             index = self.clients.index(client)
-            window_size = self.window_size(screen, index)
+            client_wrapper = self.clients[index]
+            if not client_wrapper.rect:
+                client_wrapper.rect = Rect(*self.window_size(index))
             client.place(
-                window_size.x,
-                window_size.y,
-                window_size.width,
-                window_size.height,
+                client_wrapper.x,
+                client_wrapper.y,
+                client_wrapper.width,
+                client_wrapper.height,
                 0,
                 None)
             client.unhide()
@@ -355,15 +418,15 @@ class Vertical(DynamicBaseLayout):
             for index, layout in enumerate(self.clients):
                 if isinstance(layout, DynamicBaseLayout):
                     if layout.client_layout(client):
-                        inner_screen_size = self.window_size(screen, index)
-                        layout.configure(client, inner_screen_size)
+                        layout.configure(client,
+                                ScreenRect(*self.window_size(index)))
 
-    def window_size(self, screen, index):
-        return ScreenRect(
-            screen.x,
-            int(screen.y + screen.height / len(self.clients) * index),
-            screen.width,
-            int(screen.height / len(self.clients)))
+    def window_size(self, index):
+        return (
+            self.rect.x,
+            int(self.rect.y + self.rect.height / len(self.clients) * index),
+            self.rect.width,
+            int(self.rect.height / len(self.clients)))
 
     def focus_up(self):
         if self.client_focus > 0:
@@ -399,6 +462,35 @@ class Vertical(DynamicBaseLayout):
         else:
             return DynamicBaseLayout.shuffle_client_down(self, client)
 
+    def resize(self, x, y):
+        focused_layout = self.clients[self.client_focus]
+        if focused_layout.rect:
+            if 0 < y and y < self.rect.height - focused_layout.rect.height:
+                focused_layout.rect.height += y
+                ratio = y / (self.rect.height - focused_layout.rect.height)
+                inv_ratio = 1.0 - ratio
+                for client in self.clients:
+                    if client != focused_layout:
+                        client.rect.height *= inv_ratio
+                        client.rect.height = int(client.rect.height)
+            if y < 0 and -y < focused_layout.rect.height:
+                focused_layout.rect.height += y
+                offset = int(-y / (len(self.clients) - 1))
+                for client in self.clients:
+                    if client != focused_layout:
+                        client.rect.height += offset
+            self.fix_resize_issues()
+
+    def fix_resize_issues(self):
+        # fix some rounding errors to avoid one pixel gaps
+        # also set position values, depending on new size
+        y_sum = self.rect.y
+        for client in self.clients[:-1]:
+            client.rect.y = y_sum
+            y_sum += client.rect.height
+        self.clients[-1].rect.y = y_sum
+        self.clients[-1].rect.height = self.rect.height - (y_sum - self.rect.y)
+
     def up_layout(self):
         if self.client_focus > 0:
             up_client = self.clients[self.client_focus - 1]
@@ -415,36 +507,40 @@ class Vertical(DynamicBaseLayout):
         else:
             return DynamicBaseLayout.down_layout(self)
 
-class Horizontal(DynamicBaseLayout):
+class HorizontalLayout(DynamicBaseLayout):
     '''
     horizontal layout
     '''
 
     def configure(self, client, screen):
+        if not self.rect:
+            self.rect = Rect(screen.x, screen.y, screen.width, screen.height)
         if client in self.clients:
             index = self.clients.index(client)
-            window_size = self.window_size(screen, index)
+            client_wrapper = self.clients[index]
+            if not client_wrapper.rect:
+                client_wrapper.rect = Rect(self.window_size(index))
             client.place(
-                window_size.x,
-                window_size.y,
-                window_size.width,
-                window_size.height,
+                client_wrapper.x,
+                client_wrapper.y,
+                client_wrapper.width,
+                client_wrapper.height,
                 0,
                 None)
             client.unhide()
         else:
             for index, layout in enumerate(self.clients):
                 if isinstance(layout, DynamicBaseLayout):
-                    inner_screen_size = self.window_size(screen, index)
                     if layout.client_layout(client):
-                        layout.configure(client, inner_screen_size)
+                        layout.configure(client, 
+                                ScreenRect(*self.window_size(index)))
 
-    def window_size(self, screen, index):
-        return ScreenRect(
-            int(screen.x + screen.width / len(self.clients) * index),
-            screen.y,
-            int(screen.width / len(self.clients)),
-            screen.height)
+    def window_size(self, index):
+        return (
+            int(self.rect.x + self.rect.width / len(self.clients) * index),
+            self.rect.y,
+            int(self.rect.width / len(self.clients)),
+            self.rect.height)
 
     def focus_left(self):
         if self.client_focus > 0:
@@ -480,6 +576,35 @@ class Horizontal(DynamicBaseLayout):
         else:
             return DynamicBaseLayout.shuffle_client_right(self, client)
 
+    def resize(self, x, y):
+        focused_layout = self.clients[self.client_focus]
+        if focused_layout.rect:
+            if 0 < x and x < self.rect.width - focused_layout.rect.width:
+                focused_layout.rect.width += x
+                ratio = x / (self.rect.width - focused_layout.rect.width)
+                inv_ratio = 1.0 - ratio
+                for client in self.clients:
+                    if client != focused_layout:
+                        client.rect.width *= inv_ratio
+                        client.rect.width = int(client.rect.width)
+            if x < 0 and -x < focused_layout.rect.width:
+                focused_layout.rect.width += x
+                offset = int(-x / (len(self.clients) - 1))
+                for client in self.clients:
+                    if client != focused_layout:
+                        client.rect.width += offset
+            self.fix_resize_issues()
+
+    def fix_resize_issues(self):
+        # fix some rounding errors to avoid one pixel gaps
+        # also set position values, depending on new size
+        x_sum = self.rect.x
+        for client in self.clients[:-1]:
+            client.rect.x = x_sum
+            x_sum += client.rect.width
+        self.clients[-1].rect.x = x_sum
+        self.clients[-1].rect.width = self.rect.width - (x_sum - self.rect.x)
+
     def left_layout(self):
         if self.client_focus > 0:
             left_client = self.clients[self.client_focus - 1]
@@ -499,12 +624,14 @@ class Horizontal(DynamicBaseLayout):
 class Tabs(DynamicBaseLayout):
 
     def configure(self, client, screen):
+        if not self.rect:
+            self.rect = Rect(screen.x, screen.y, screen.width, screen.height)
         if self.clients[self.client_focus] == client:
             client.place(
-                screen.x,
-                screen.y,
-                screen.width,
-                screen.height,
+                self.rect.x,
+                self.rect.y,
+                self.rect.width,
+                self.rect.height,
                 0,
                 None)
             client.unhide()
@@ -577,62 +704,87 @@ class SimpleDynamic(DynamicBaseLayout):
                     layout.configure(client, screen)
 
     def add(self, client):
+        self.cleanup()
         if len(self.clients) == 0:
             layout = self.default_layout()
             layout.root_layout = self
             DynamicBaseLayout.add(self, layout)
-        self.focused_layout().add(client)
-        self.cleanup()
+        self.focused_layout().add(WindowWrapper(client))
+        self.group.layout_all()
         print(self)
 
-    def focus_left(self):
+    def cmd_focus_left(self):
         client = self.focused_layout().focus_left()
-        self.group.focus(client, True)
+        if client:
+            self.group.focus(client.window, True)
 
-    def focus_right(self):
+    def cmd_focus_right(self):
         client = self.focused_layout().focus_right()
-        self.group.focus(client, True)
+        if client:
+            self.group.focus(client.window, True)
 
-    def focus_up(self):
+    def cmd_focus_up(self):
         client = self.focused_layout().focus_up()
-        self.group.focus(client, True)
+        if client:
+            self.group.focus(client.window, True)
 
-    def focus_down(self):
+    def cmd_focus_down(self):
         client = self.focused_layout().focus_down()
-        self.group.focus(client, True)
+        if client:
+            self.group.focus(client.window, True)
 
-    def shuffle_left(self):
+    def cmd_shuffle_left(self):
         client = self.focused_layout().shuffle_client_left()
         self.cleanup()
-        print(self)
+        self.reset_size()
         self.group.layout_all()
-        self.group.focus(client, True)
+        if client:
+            self.group.focus(client.window, True)
+        print(self)
 
-    def shuffle_right(self):
+    def cmd_shuffle_right(self):
         client = self.focused_layout().shuffle_client_right()
         self.cleanup()
-        print(self)
+        self.reset_size()
         self.group.layout_all()
-        self.group.focus(client, True)
+        if client:
+            self.group.focus(client.window, True)
+        print(self)
 
-    def shuffle_up(self):
+    def cmd_shuffle_up(self):
         client = self.focused_layout().shuffle_client_up()
         self.cleanup()
-        print(self)
+        self.reset_size()
         self.group.layout_all()
-        self.group.focus(client, True)
+        if client:
+            self.group.focus(client.window, True)
+        print(self)
 
-    def shuffle_down(self):
+    def cmd_shuffle_down(self):
         client = self.focused_layout().shuffle_client_down()
         self.cleanup()
-        print(self)
+        self.reset_size()
         self.group.layout_all()
-        self.group.focus(client, True)
+        if client:
+            self.group.focus(client.window, True)
+        print(self)
+
+    def cmd_resize(self, x, y):
+        self.focused_layout().resize(x, y)
+        self.group.layout_all()
+        print(self)
+
+    def cmd_reset_size(self):
+        self.reset_size()
+        self.group.layout_all()
+        print(self)
 
     def remove(self, client):
         client = DynamicBaseLayout.remove(self, client)
         self.cleanup()
-        print(self)
+        self.reset_size()
         self.group.layout_all()
-        self.group.focus(client, True)
+        if client:
+            self.group.focus(client.window, True)
+        print(self)
 
