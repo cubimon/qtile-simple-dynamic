@@ -1,4 +1,5 @@
 import textwrap
+import yaml
 from libqtile.layout.base import Layout
 from libqtile.window import Window
 from libqtile.config import ScreenRect
@@ -17,10 +18,12 @@ class Rect:
 
 class WindowWrapper:
 
-    def __init__(self, window):
-        if window is None:
-            raise ValueError('window must be set')
+    def __init__(self, window=None):
         self.window = window
+        if self.window:
+            self.wm_class = window.window.get_wm_class()
+        else:
+            self.wm_class = None
 
     def __eq__(self, other):
         if isinstance(other, self.__class__):
@@ -30,10 +33,13 @@ class WindowWrapper:
         return False
 
     def __hash__(self):
+        if not self.window:
+            return 0
         return self.window.__hash__()
 
     def __str__(self):
-        return 'WindowWrapper({})'.format(str(self.window))
+        return 'WindowWrapper({}, wm_class={})'.format(
+                str(self.window), self.wm_class)
 
 '''
 Windows are leaves
@@ -360,6 +366,19 @@ class DynamicBaseLayout(Layout):
         else:
             return self.clients[self.client_focus].focused_client()
 
+    def free_client_by_class(self, wm_class):
+        # find window wrapper with wm_class without window
+        for client in self.clients:
+            if isinstance(client, WindowWrapper) and \
+                    client.window is None and \
+                    client.wm_class == wm_class:
+                return client
+            elif isinstance(client, DynamicBaseLayout):
+                free_client = client.free_client_by_class(wm_class)
+                if free_client:
+                    return free_client
+
+
     def client_layout(self, client):
         # return layout of client, direct parent of client
         if client in self.clients:
@@ -369,6 +388,16 @@ class DynamicBaseLayout(Layout):
                 result = layout.client_layout(client)
                 if result:
                     return result
+
+    def all_windows(self):
+        # return list of all window wrapper
+        result = []
+        for client in self.clients:
+            if isinstance(client, WindowWrapper):
+                result.append(client)
+            else:
+                result.extend(client.all_windows())
+        return result
 
     def leaf_layouts(self):
         # return all leaves of this, layout
@@ -627,7 +656,7 @@ class HorizontalLayout(DynamicBaseLayout):
         else:
             return DynamicBaseLayout.right_layout(self)
 
-class Tabs(DynamicBaseLayout):
+class TabsLayout(DynamicBaseLayout):
 
     def configure(self, client, screen):
         if not self.rect:
@@ -684,12 +713,12 @@ class Tabs(DynamicBaseLayout):
         else:
             return DynamicBaseLayout.shuffle_client_right(self, client)
 
-DefaultLayout = Tabs
+DefaultLayout = TabsLayout
 
 class SimpleDynamic(DynamicBaseLayout):
 
     defaults = [
-        ("default_layout", Tabs, "Default layout class")
+        ("default_layout", TabsLayout, "Default layout class")
     ]
 
     def __init__(self, **config):
@@ -710,12 +739,25 @@ class SimpleDynamic(DynamicBaseLayout):
                     layout.configure(client, screen)
 
     def add(self, client):
+        print('add')
+        print(client)
+        if isinstance(client, Window):
+            # check for empty window wrapper with wm_class
+            free_client = self.free_client_by_class(client.window.get_wm_class())
+            if free_client:
+                free_client.window = client
+                print('found reserved space for client')
+                print(self)
+                return
         self.cleanup()
         if len(self.clients) == 0:
             layout = self.default_layout()
             layout.root_layout = self
             DynamicBaseLayout.add(self, layout)
-        self.focused_layout().add(WindowWrapper(client))
+        if isinstance(client, Window):
+            self.focused_layout().add(WindowWrapper(client))
+        else:
+            self.focused_layout().add(client)
         self.group.layout_all()
         print(self)
 
@@ -785,6 +827,78 @@ class SimpleDynamic(DynamicBaseLayout):
         self.group.layout_all()
         print(self)
 
+    def to_tree(self, o):
+        if isinstance(o, WindowWrapper):
+            return {
+                'class_name': o.wm_class[0] + ' - ' + o.wm_class[1]
+            }
+        else:
+            client_list = []
+            for client in o.clients:
+                client_list.append(self.to_tree(client))
+            layout_name = str(o.__class__.__name__)
+            if isinstance(o, SimpleDynamic):
+                return client_list
+            else:
+                return {
+                    layout_name: client_list,
+                    'rect': {
+                        'x': o.rect.x,
+                        'y': o.rect.y,
+                        'width': o.rect.width,
+                        'height': o.rect.height
+                    }
+                }
+
+    def add_from_tree(self, parent, tree):
+        if isinstance(tree, list):
+            for sub_tree in tree:
+                self.add_from_tree(parent, sub_tree)
+        elif isinstance(tree, dict):
+            if 'class_name' in tree:
+                # window wrapper
+                window = WindowWrapper(None)
+                window.wm_class = tuple(tree['class_name'].split(' - '))
+                parent.add(window)
+            else:
+                # layout
+                layout_name = list(tree.keys())[0]
+                layout = None
+                if layout_name == 'HorizontalLayout':
+                    layout = HorizontalLayout()
+                elif layout_name == 'VerticalLayout':
+                    layout = VerticalLayout()
+                elif layout_name == 'TabsLayout':
+                    layout = TabsLayout()
+                if 'rect' in tree:
+                    if 'x' in tree['rect'] and \
+                            'y' in tree['rect'] and \
+                            'width' in tree['rect'] and \
+                            'height' in tree['rect']:
+                        rect = Rect(
+                                tree['rect']['x'], tree['rect']['y'],
+                                tree['rect']['width'], tree['rect']['height'])
+                        layout.rect = rect
+                if layout:
+                    parent.add(layout)
+                    self.add_from_tree(layout, tree[layout_name])
+
+    def cmd_save_yaml(self, file_name):
+        tree = self.to_tree(self)
+        with open(file_name, 'w') as file:
+            yaml.dump(tree, file)
+
+    def cmd_load_yaml(self, file_name):
+        with open(file_name, 'r') as file:
+            tree = yaml.load(file)
+            all_windows = self.all_windows()
+            self.clients = []
+            self.add_from_tree(self, tree)
+            for window in all_windows:
+                self.add(window.window)
+            print('loaded from {}'.format(file_name))
+            print(self)
+
     def remove(self, client):
         if isinstance(client, Window):
             if client.fullscreen:
@@ -795,5 +909,6 @@ class SimpleDynamic(DynamicBaseLayout):
         self.group.layout_all()
         if client:
             self.group.focus(client.window, True)
+        print('after remove')
         print(self)
 
