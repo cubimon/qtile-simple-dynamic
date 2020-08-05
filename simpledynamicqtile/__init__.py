@@ -303,8 +303,8 @@ class DynamicBaseLayout(Layout):
                         self.parent != self.root_layout:
                     return self.parent.remove(self)
             else:
-                if self.client_focus == len(self.clients):
-                    self.client_focus = len(self.clients) - 1
+                if self.client_focus > 0:
+                    self.client_focus -= 1
                 if len(self.clients) > 0:
                     return self.focused_client()
         elif recursive:
@@ -377,7 +377,6 @@ class DynamicBaseLayout(Layout):
                 free_client = client.free_client_by_class(wm_class)
                 if free_client:
                     return free_client
-
 
     def client_layout(self, client):
         # return layout of client, direct parent of client
